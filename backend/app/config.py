@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 800
     CHUNK_OVERLAP: int = 200
     TOP_K: int = 5
+    AGENTIC_ROUTER_ENABLED: bool = True
+
 
     # Guardrails (plan v3, Part 2)
     # GUARDRAILS_ENABLED is the master kill switch for all input/output

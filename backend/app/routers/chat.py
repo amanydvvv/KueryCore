@@ -23,7 +23,9 @@ from app.config import get_settings
 from app.schemas import ChatRequest, ChatResponse, Citation
 from app.services.retrieval import retrieve_context
 from app.services.rewrite import rewrite_followup
+from app.services.router import classify_intent, IntentType
 from app.services.generation import get_llm
+
 from app.services.memory import update_conversation_summary
 from app.services.guardrails import (
     INJECTION_REFUSAL_MESSAGE,
@@ -178,32 +180,41 @@ async def chat(
         db.add(user_msg)
         await db.flush()
 
-        # 3b. Injection short-circuit: no retrieval, no generation. The turn
-        # stays normal-shaped: user message + assistant refusal + QueryLog
-        # with empty retrieval artifacts.
+        intent_name = "factual_lookup"
         if refusal_needed:
             avg_similarity = 0.0
             citations = []
             citation_dicts = []
             answer = INJECTION_REFUSAL_MESSAGE
+            intent_name = "refusal"
         else:
-            # 4. Query corpus metadata (ground truth for the LLM)
+            # 4. Agentic Intent Classification (Phase 1 Router)
+            decision = await classify_intent(
+                query=question,
+                chat_history=chat_history,
+                default_top_k=request_body.top_k,
+            )
+            intent_name = decision.intent.value
+
+            # 5. Query corpus metadata (ground truth for the LLM)
             corpus_metadata = await _build_corpus_metadata(db, current_user.id)
 
-            # 5. Retrieve relevant chunks from pgvector scoped to current user.
-            # A conversational follow-up is rewritten against the history
-            # into a standalone query first, so deictic turns ("what about
-            # its RPO?") retrieve on the resolved intent, not the bare text.
-            retrieval_query = await rewrite_followup(question, chat_history)
-            retrieved_items = await retrieve_context(
-                query=retrieval_query,
-                db=db,
-                document_id=request_body.document_id,
-                user_id=current_user.id,
-                top_k=request_body.top_k,
-            )
-
-            chunks = [item[0] for item in retrieved_items]
+            if decision.skip_retrieval:
+                retrieval_query = question
+                retrieved_items = []
+                chunks = []
+            else:
+                # Retrieve relevant chunks with router-suggested top_k
+                retrieval_query = await rewrite_followup(question, chat_history)
+                effective_top_k = max(request_body.top_k, decision.suggested_top_k)
+                retrieved_items = await retrieve_context(
+                    query=retrieval_query,
+                    db=db,
+                    document_id=request_body.document_id,
+                    user_id=current_user.id,
+                    top_k=effective_top_k,
+                )
+                chunks = [item[0] for item in retrieved_items]
 
             # 6. Build citations list with real score & filename
             citations = []
@@ -242,7 +253,7 @@ async def chat(
             )
 
             # 7. Generate answer using Groq (Llama 3.1) with chat history + corpus metadata
-            if not chunks:
+            if not chunks and not decision.skip_retrieval:
                 answer = "I couldn't find any relevant information in your uploaded documents to answer your question."
             else:
                 answer = await generate_answer(
@@ -251,8 +262,9 @@ async def chat(
                     chat_history=chat_history,
                     corpus_metadata=corpus_metadata,
                     conversation_summary=conv.context_summary,
-                    resolved_query=retrieval_query,
+                    resolved_query=retrieval_query if not decision.skip_retrieval else None,
                 )
+
 
             # Output guardrail: replace a flagged answer, but log the flag
             # (with reasons) — never a silent swap.
@@ -316,7 +328,9 @@ async def chat(
             conversation_id=conversation_id,
             latency_ms=latency_ms,
             avg_similarity=avg_similarity,
+            intent=intent_name,
         )
+
 
     except RateLimitError as e:
         await db.rollback()
@@ -436,20 +450,33 @@ async def chat_stream(
             background=BackgroundTask(update_conversation_summary, conversation_id),
         )
 
-    # 4. Query corpus metadata (ground truth for the LLM)
+    # 4. Agentic Intent Classification (Phase 1 Router)
+    decision = await classify_intent(
+        query=question,
+        chat_history=chat_history,
+        default_top_k=request_body.top_k,
+    )
+    intent_name = decision.intent.value
+
+    # 5. Query corpus metadata (ground truth for the LLM)
     corpus_metadata = await _build_corpus_metadata(db, current_user.id)
 
-    # 5. Retrieve context chunks scoped to user. Same conversational
-    # follow-up rewrite as the non-stream path (fail-closed to raw text).
-    retrieval_query = await rewrite_followup(question, chat_history)
-    retrieved_items = await retrieve_context(
-        query=retrieval_query,
-        db=db,
-        document_id=request_body.document_id,
-        user_id=current_user.id,
-        top_k=request_body.top_k,
-    )
-    chunks = [item[0] for item in retrieved_items]
+    if decision.skip_retrieval:
+        retrieval_query = question
+        retrieved_items = []
+        chunks = []
+    else:
+        # Retrieve context chunks scoped to user
+        retrieval_query = await rewrite_followup(question, chat_history)
+        effective_top_k = max(request_body.top_k, decision.suggested_top_k)
+        retrieved_items = await retrieve_context(
+            query=retrieval_query,
+            db=db,
+            document_id=request_body.document_id,
+            user_id=current_user.id,
+            top_k=effective_top_k,
+        )
+        chunks = [item[0] for item in retrieved_items]
 
     citations = []
     similarity_scores = []
@@ -504,15 +531,16 @@ async def chat_stream(
     async def event_generator():
         full_answer = []
         try:
-            # Event 1: Metadata
+            # Event 1: Metadata (includes intent)
             meta_payload = dumps({
                 "conversation_id": str(conversation_id),
                 "citations": citation_dicts,
-                "avg_similarity": avg_similarity
+                "avg_similarity": avg_similarity,
+                "intent": intent_name,
             })
             yield f"event: metadata\ndata: {meta_payload}\n\n"
 
-            if not chunks:
+            if not chunks and not decision.skip_retrieval:
                 no_info = "I couldn't find any relevant information in your uploaded documents to answer your question."
                 full_answer.append(no_info)
                 token_payload = dumps({"delta": no_info})
@@ -524,11 +552,12 @@ async def chat_stream(
                     chat_history=chat_history,
                     corpus_metadata=corpus_metadata,
                     conversation_summary=conv.context_summary,
-                    resolved_query=retrieval_query,
+                    resolved_query=retrieval_query if not decision.skip_retrieval else None,
                 ):
                     full_answer.append(token)
                     token_payload = dumps({"delta": token})
                     yield f"event: token\ndata: {token_payload}\n\n"
+
 
             complete_text = "".join(full_answer)
             latency_ms = int((time.time() - start_time) * 1000)

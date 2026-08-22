@@ -72,6 +72,8 @@ class ChatResponse(BaseModel):
     conversation_id: UUID
     latency_ms: int
     avg_similarity: float
+    intent: Optional[str] = None
+
 
 
 # ──────────────────────────────────────────────
