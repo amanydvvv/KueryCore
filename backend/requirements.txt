@@ -16,8 +16,9 @@ pydantic-settings==2.9.1
 
 # LLM / RAG
 langchain-google-genai==2.1.4  # embeddings only (Groq has no embedding API)
-langchain-groq
-openai  # OpenAI-compatible client for Groq (vision OCR)
+langchain-groq>=0.2.5
+openai>=1.65.5
+
 langchain-text-splitters==0.3.8
 
 # Document parsing

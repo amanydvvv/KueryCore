@@ -39,6 +39,8 @@ if is_testing:
 else:
     engine_kwargs["pool_size"] = 10
     engine_kwargs["max_overflow"] = 20
+    engine_kwargs["pool_recycle"] = 300
+
 
 engine = create_async_engine(
     settings.DATABASE_URL,
