@@ -5,7 +5,7 @@ import AuthModal from './components/AuthModal';
 import ResetPassword from './components/ResetPassword';
 import WorkspaceSkeleton from './components/layout/WorkspaceSkeleton';
 import { useConversations } from './hooks/useConversations';
-import { getAuthToken, removeAuthToken, fetchCurrentUser } from './services/api';
+import { getAuthToken, removeAuthToken, fetchCurrentUser, warmUpBackend } from './services/api';
 
 function App() {
   const [user, setUser] = useState(null);
@@ -14,6 +14,11 @@ function App() {
 
   // Detect /reset-password route without a full router dependency
   const isResetRoute = window.location.pathname === '/reset-password';
+
+  // Immediately kick off background warm-up for Render free tier
+  useEffect(() => {
+    warmUpBackend();
+  }, []);
 
   const {
     conversations,

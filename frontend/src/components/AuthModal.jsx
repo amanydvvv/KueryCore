@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { loginUser, signupUser, requestPasswordReset } from '../services/api';
+import { loginUser, signupUser, requestPasswordReset, warmUpBackend } from '../services/api';
 import Interactive3DSpheres from './auth/Interactive3DSpheres';
 
 const ANIMATED_SUBTITLES = [
@@ -17,7 +17,27 @@ export default function AuthModal({ onAuthSuccess, onAuthError }) {
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadingSeconds, setLoadingSeconds] = useState(0);
   const submitInFlight = useRef(false);
+
+  // Pre-warm backend when AuthModal mounts
+  useEffect(() => {
+    warmUpBackend();
+  }, []);
+
+  // Track elapsed loading seconds to display cold-start status
+  useEffect(() => {
+    let interval;
+    if (loading) {
+      setLoadingSeconds(0);
+      interval = setInterval(() => {
+        setLoadingSeconds((prev) => prev + 1);
+      }, 1000);
+    } else {
+      setLoadingSeconds(0);
+    }
+    return () => clearInterval(interval);
+  }, [loading]);
 
   // Animated typewriter state
   const [subtitleIndex, setSubtitleIndex] = useState(0);
@@ -66,7 +86,7 @@ export default function AuthModal({ onAuthSuccess, onAuthError }) {
     setLoading(true);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15_000);
+    const timeoutId = setTimeout(() => controller.abort(), 75_000);
 
     try {
       const authFn = mode === 'signin' ? loginUser : signupUser;
@@ -78,7 +98,7 @@ export default function AuthModal({ onAuthSuccess, onAuthError }) {
       const isTimeout = err.name === 'AbortError' || /aborted/i.test(err.message);
       setError(
         isTimeout
-          ? 'Request timed out. The server may be starting up — please try again.'
+          ? 'Server took longer than expected to wake up. Please click again to retry.'
           : err.message || 'Authentication failed. Please verify credentials.'
       );
       if (onAuthError) onAuthError();
@@ -133,7 +153,7 @@ export default function AuthModal({ onAuthSuccess, onAuthError }) {
     setLoading(true);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15_000);
+    const timeoutId = setTimeout(() => controller.abort(), 75_000);
 
     try {
       const guestId = Math.random().toString(36).substring(2, 8);
@@ -148,7 +168,7 @@ export default function AuthModal({ onAuthSuccess, onAuthError }) {
       const isTimeout = err.name === 'AbortError' || /aborted/i.test(err.message);
       setError(
         isTimeout
-          ? 'Request timed out. The server may be waking up — please try again in a moment.'
+          ? 'Server took longer than expected to wake up. Please click again to retry.'
           : err.message || 'Demo initialization failed. Please try standard sign up.'
       );
       if (onAuthError) onAuthError();
@@ -232,6 +252,24 @@ export default function AuthModal({ onAuthSuccess, onAuthError }) {
               >
                 Sign Up
               </button>
+            </div>
+          )}
+
+          {/* Cold-start progressive indicator */}
+          {loading && loadingSeconds >= 4 && (
+            <div className="w-full mb-4 px-4 py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-3 animate-in fade-in">
+              <span className="relative flex h-3 w-3 shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+              </span>
+              <div className="flex flex-col text-left">
+                <span className="text-xs font-semibold text-emerald-300">
+                  {loadingSeconds < 20 ? 'Waking up cloud server...' : 'Almost ready, finalizing connection...'}
+                </span>
+                <span className="text-[10px] text-slate-400">
+                  Free tier takes ~30s on cold start ({loadingSeconds}s elapsed)
+                </span>
+              </div>
             </div>
           )}
 

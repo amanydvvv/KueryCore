@@ -1,0 +1,22 @@
+name: Keep Alive Render & Supabase
+
+on:
+  schedule:
+    # Runs every 14 minutes to keep Render (15m idle) and Supabase active
+    - cron: '*/14 * * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub UI
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping KueryCore Backend Health Endpoint
+        run: |
+          echo "Pinging KueryCore backend to prevent cold start and keep Supabase warm..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 https://documind-ai-97t5.onrender.com/api/health)
+          echo "Received HTTP status: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" -eq 200 ]; then
+            echo "Backend is warm and healthy."
+          else
+            echo "Warning: Backend responded with status $HTTP_STATUS"
+          fi

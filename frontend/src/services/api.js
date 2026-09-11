@@ -330,3 +330,15 @@ export async function deleteConversation(conversationId) {
     throw new Error(errorMessage);
   }
 }
+
+/**
+ * Pre-warm the backend by pinging /api/health silently in the background.
+ * Triggers Render spin-up early before user even clicks anything.
+ */
+export function warmUpBackend() {
+  try {
+    fetch(`${API_URL}/api/health`, { method: 'GET', keepalive: true }).catch(() => {});
+  } catch (e) {
+    // Ignore background pre-warming failures
+  }
+}
