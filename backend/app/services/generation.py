@@ -154,7 +154,7 @@ STRICT RULES:
 3. NEVER invent or assume facts not present in the Context.
 4. NEVER reference page numbers, source chunks, vector retrieval, or internal processing.
 5. Answer directly and concisely. Do not start with "According to the document" or similar hedges.
-6. If asked about a person using documents about that person, only state what the documents say.
+6. If asked about a person, candidate, or user's name (e.g. "what is my name", "who am I", "whose resume is this", "what smy name") and the document is a resume, CV, bio, or profile, look for the person's name prominently stated in the document (such as in the header or title) and state their name directly.
 
 Prior Context:
 {conversation_summary}
@@ -173,7 +173,7 @@ User Question: {query}
 
 <thought_process>
 Step 1: Is the User Question casual chat or off-topic? If yes, respond naturally without documents.
-Step 2: Does the Context contain facts that directly answer the User Question? If no, output the "insufficient information" response.
+Step 2: Does the Context contain facts that answer the User Question (including candidate/person names stated in document or resume headers)? If no, output the "insufficient information" response.
 Step 3: If yes, identify only the relevant facts and compose a precise answer.
 </thought_process>
 <answer>

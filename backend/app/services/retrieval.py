@@ -385,6 +385,28 @@ async def retrieve_context(
             fused_candidates=fused_candidates, query=query, final_top_k=top_k
         )
 
+        # 3b. Identity Query Guard: For queries asking about name/identity, guarantee document header (index=0) is included
+        identity_pattern = re.compile(
+            r"\b(name|who\s*am\s*i|whose\s*(resume|cv|profile|document)|who\s*is\s*this|my\s*name|candidate('s)?\s*name|smy\s*name)\b",
+            re.IGNORECASE,
+        )
+        if identity_pattern.search(query):
+            header_stmt = select(Chunk).where(Chunk.index == 0)
+            if document_id is not None:
+                header_stmt = header_stmt.where(Chunk.document_id == document_id)
+            elif user_id is not None:
+                header_stmt = header_stmt.join(Document, Chunk.document_id == Document.id).where(Document.user_id == user_id)
+            header_res = await db.execute(header_stmt.limit(3))
+            header_chunks = header_res.scalars().all()
+            existing_ids = {c.id for c, _ in reranked_top_k}
+            for hc in header_chunks:
+                if hc.id not in existing_ids:
+                    # Insert header chunk at the beginning for identity resolution
+                    reranked_top_k.insert(0, (hc, 0.99))
+                    existing_ids.add(hc.id)
+            if len(reranked_top_k) > max(top_k, 5):
+                reranked_top_k = reranked_top_k[:max(top_k, 5)]
+
         total_retrieval_ms = int((time.time() - start_time) * 1000)
 
         # 4. Resolve source document filenames and display_titles
