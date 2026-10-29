@@ -19,4 +19,4 @@ services:
       - key: GENERATIVE_MODEL
         value: openai/gpt-oss-20b
       - key: CORS_ORIGINS
-        value: '["http://localhost:5173", "http://localhost:3000", "https://*.vercel.app"]'
+        value: '["http://localhost:5173", "http://localhost:3000", "https://docu-mind-ai-iota.vercel.app"]'
