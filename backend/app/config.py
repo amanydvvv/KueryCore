@@ -32,6 +32,15 @@ class Settings(BaseSettings):
             return v.replace("postgresql://", "postgresql+asyncpg://", 1)
         return v
 
+    @field_validator("DATABASE_URL_SYNC")
+    @classmethod
+    def sanitize_database_url_sync(cls, v: str) -> str:
+        # Normalize Supabase/Heroku short-form postgres:// to postgresql://
+        # (psycopg2 / Alembic require the long form).
+        if v.startswith("postgres://"):
+            return v.replace("postgres://", "postgresql://", 1)
+        return v
+
     # LLM & Embeddings
     GEMINI_API_KEY: str | None = None
     GOOGLE_API_KEY: str | None = None

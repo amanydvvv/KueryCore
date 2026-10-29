@@ -83,14 +83,25 @@ async def add_correlation_id(request: Request, call_next):
 
 # CORS
 origins = settings.CORS_ORIGINS if isinstance(settings.CORS_ORIGINS, list) else ["*"]
+# Apply strict origin enforcement and disable credentials unless explicitly needed.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins if "*" in origins else origins,
-    allow_origin_regex=r"^https://[a-z0-9-]+\.vercel\.app$",
-    allow_credentials=True,
-    allow_methods=["*"],
+    # Updated regex to only allow specific trusted domains (adjust as needed).
+    allow_origin_regex=r"^https://([a-z0-9-]+-[a-z0-9]+-[a-z0-9]+\.vercel\.app|docu-mind-ai-iota\.vercel\.app)$",
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# Middleware to log CORS rejections (status 403) for unexpected origins.
+@app.middleware("http")
+async def log_cors_rejections(request: Request, call_next):
+    response = await call_next(request)
+    origin = request.headers.get("origin")
+    if origin and response.status_code == 403:
+        logger.warning("CORS rejection for origin: %s", origin)
+    return response
 
 # Rate limiting
 from slowapi.errors import RateLimitExceeded
