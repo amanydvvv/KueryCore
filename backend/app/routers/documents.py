@@ -10,9 +10,9 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks, Request
 from fastapi.responses import Response
-from sqlalchemy import select, func, delete
+from app.core.ratelimit import limiter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -48,8 +48,10 @@ def _compute_hash(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+@limiter.limit("5/minute")
 @router.post("/upload", response_model=DocumentResponse, status_code=201)
 async def upload_document(
+    request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),

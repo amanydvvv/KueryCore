@@ -32,7 +32,16 @@ async def lifespan(app: FastAPI):
     import asyncio
 
     # --- Database ---
-    await init_db()
+    # Wrapped in try/except so a transient connection hiccup at startup
+    # doesn't crash-loop the service. Tables are created by alembic upgrade
+    # head (Render Pre-Deploy Command); init_db() here only enables the
+    # pgvector extension and is safe to retry on the next request.
+    try:
+        await init_db()
+    except Exception as e:
+        logger.critical(
+            "Database init failed at startup: %s -- server starting in degraded mode.", e
+        )
 
     # --- Startup model smoke-test ---
     # Runs in non-development environments only. Fails loudly (CRITICAL log)
