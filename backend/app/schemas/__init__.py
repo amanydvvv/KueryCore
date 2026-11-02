@@ -151,5 +151,6 @@ class HealthResponse(BaseModel):
     database: str
     llm_provider: str           # embedding model (Gemini)
     generative_model: str = "unconfigured"  # chat generation model (Groq cascade)
+    migration_version: str = "unknown"     # current alembic_version in DB
     version: str
 

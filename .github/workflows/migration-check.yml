@@ -1,0 +1,40 @@
+name: Migration Lint
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check-migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure no alembic migration files are untracked
+        run: |
+          UNTRACKED=$(git ls-files --others --exclude-standard backend/alembic/versions/)
+          if [ -n "$UNTRACKED" ]; then
+            echo "❌  Untracked migration file(s) detected:"
+            echo "$UNTRACKED"
+            echo ""
+            echo "You must commit migration files BEFORE applying them to production."
+            echo "Run: git add $UNTRACKED && git commit"
+            exit 1
+          fi
+          echo "✅  All migration files are tracked."
+
+      - name: Check for a single alembic head (no branch forks)
+        run: |
+          pip install alembic sqlalchemy 2>/dev/null
+          cd backend
+          HEADS=$(python -m alembic heads 2>/dev/null | grep -c "(head)")
+          if [ "$HEADS" -gt 1 ]; then
+            echo "❌  Multiple alembic heads detected ($HEADS). Merge your migration branches first."
+            python -m alembic heads
+            exit 1
+          fi
+          echo "✅  Single alembic head confirmed."

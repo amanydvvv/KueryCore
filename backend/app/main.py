@@ -153,12 +153,18 @@ async def health_check():
     from sqlalchemy import text
     from app.database import async_session
 
-    # --- Database check ---
+    # --- Database check + migration version ---
     db_status = "unhealthy"
+    migration_version = "unknown"
     try:
         async with async_session() as session:
             await session.execute(text("SELECT 1"))
             db_status = "healthy"
+            # Read the current alembic revision from the DB so the health
+            # endpoint can confirm migrations have been applied correctly.
+            result = await session.execute(text("SELECT version_num FROM alembic_version"))
+            row = result.fetchone()
+            migration_version = row[0] if row else "no_version_table"
     except Exception as e:
         logger.warning("DB health check failed: %s", e)
         db_status = "unhealthy"
@@ -209,5 +215,6 @@ async def health_check():
         database=db_status,
         llm_provider=llm_status,
         generative_model=gen_status,
+        migration_version=migration_version,
         version=settings.APP_VERSION,
     )
