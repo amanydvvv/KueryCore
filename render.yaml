@@ -4,6 +4,9 @@ services:
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
+    # Runs BEFORE the new instance starts. A non-zero exit cancels the deploy
+    # (no crash-loop, no traffic cut-over). Requires DATABASE_URL_SYNC to be set.
+    preDeployCommand: "alembic upgrade head"
     healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL

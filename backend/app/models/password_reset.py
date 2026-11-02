@@ -48,7 +48,4 @@ class PasswordResetToken(Base):
         default=lambda: datetime.now(timezone.utc),
     )
 
-    __table_args__ = (
-        Index("idx_prt_user_id", "user_id"),
-        Index("idx_prt_token_hash", "token_hash", unique=True),
-    )
+
