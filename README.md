@@ -285,6 +285,36 @@ npm test -- --run
 npm run build
 ```
 
+
+---
+
+## ⚠️ Database Migration Rules (Read Before Deploying)
+
+> Ignoring these rules is what caused the Can't locate revision crash-loop on Render.
+
+### 1. Never run migrations against production from your local machine
+Always use a **local or dev database** for local development.  
+Never point DATABASE_URL at the Supabase production database while running lembic upgrade head locally.
+
+### 2. Commit migration files before applying them to production
+Every file in ackend/alembic/versions/ **must be committed and pushed** to the repo before the deploy that needs it.  
+If a migration runs on the production DB but the file isn't in git, Render's Docker container won't have it — causing a Can't locate revision crash-loop.
+
+**Rule of thumb:** git add backend/alembic/versions/ && git commit **before** you run lembic upgrade head on production.
+
+### 3. Use the Supabase Session-mode pooler connection string
+| Use-case | Port | Driver prefix |
+|---|---|---|
+| FastAPI / asyncpg (DATABASE_URL) | **6543** (Transaction mode) or **5432** (Session mode) | postgresql+asyncpg:// |
+| Alembic migrations (DATABASE_URL_SYNC) | **5432** (Session mode) | postgresql:// |
+
+Supabase pooler host: ws-0-<region>.pooler.supabase.com
+
+### 4. Migrations run in Render's Pre-Deploy Command — not in the Docker CMD
+ender.yaml is configured with preDeployCommand: "alembic upgrade head".  
+This means a failed migration cancels the deploy **before** traffic is switched — no crash-loop.  
+Do **not** re-add lembic upgrade head to the Dockerfile CMD.
+
 ---
 
 ## ⎋ License

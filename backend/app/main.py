@@ -1,4 +1,4 @@
-"""
+﻿"""
 KueryCore AI — FastAPI Application Entry Point
 """
 
@@ -32,7 +32,16 @@ async def lifespan(app: FastAPI):
     import asyncio
 
     # --- Database ---
-    await init_db()
+    # Wrapped in try/except so a transient connection hiccup at startup
+    # doesn't crash-loop the service. Tables are created by alembic upgrade
+    # head (Render Pre-Deploy Command); init_db() here only enables the
+    # pgvector extension and is safe to retry on the next request.
+    try:
+        await init_db()
+    except Exception as e:
+        logger.critical(
+            "Database init failed at startup: %s -- server starting in degraded mode.", e
+        )
 
     # --- Startup model smoke-test ---
     # Runs in non-development environments only. Fails loudly (CRITICAL log)
@@ -83,14 +92,25 @@ async def add_correlation_id(request: Request, call_next):
 
 # CORS
 origins = settings.CORS_ORIGINS if isinstance(settings.CORS_ORIGINS, list) else ["*"]
+# Apply strict origin enforcement and disable credentials unless explicitly needed.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins if "*" in origins else origins,
-    allow_origin_regex=r"^https://[a-z0-9-]+\.vercel\.app$",
-    allow_credentials=True,
-    allow_methods=["*"],
+    # Updated regex to only allow specific trusted domains (adjust as needed).
+    allow_origin_regex=r"^https://([a-z0-9-]+-[a-z0-9]+-[a-z0-9]+\.vercel\.app|docu-mind-ai-iota\.vercel\.app)$",
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# Middleware to log CORS rejections (status 403) for unexpected origins.
+@app.middleware("http")
+async def log_cors_rejections(request: Request, call_next):
+    response = await call_next(request)
+    origin = request.headers.get("origin")
+    if origin and response.status_code == 403:
+        logger.warning("CORS rejection for origin: %s", origin)
+    return response
 
 # Rate limiting
 from slowapi.errors import RateLimitExceeded
@@ -127,8 +147,13 @@ app.include_router(analytics_router)
 
 
 @app.get("/api/health", response_model=HealthResponse, tags=["health"])
-async def health_check():
-    """Check server, database, embedding provider, and generative model connectivity."""
+async def health_check(quick: bool = False):
+    """Check server, database, embedding provider, and generative model connectivity.
+
+    quick=true  -- DB-only check (SELECT 1). Skips Gemini + Groq calls.
+                  Used by keep-alive cron to avoid burning API quotas.
+    quick=false (default) -- full check: DB + embedding + generative model.
+    """
     import asyncio
     from sqlalchemy import text
     from app.database import async_session
@@ -142,6 +167,17 @@ async def health_check():
     except Exception as e:
         logger.warning("DB health check failed: %s", e)
         db_status = "unhealthy"
+
+    # --- Quick mode: DB-only (skips Gemini + Groq). Used by keep-alive cron. ---
+    if quick:
+        return HealthResponse(
+            status="healthy" if db_status == "healthy" else "unhealthy",
+            database=db_status,
+            llm_provider="skipped",
+            generative_model="skipped",
+            migration_version=migration_version,
+            version=settings.APP_VERSION,
+        )
 
     # --- Embedding provider check (Gemini) ---
     llm_status = "unhealthy"

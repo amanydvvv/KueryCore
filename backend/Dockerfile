@@ -23,5 +23,8 @@ USER appuser
 
 EXPOSE 10000
 
-CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
-
+# Migrations are intentionally NOT run here.
+# They run in Render's Pre-Deploy Command ("alembic upgrade head") so that
+# a failed migration stops the deploy before the new instance starts,
+# instead of crash-looping the live service.
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
