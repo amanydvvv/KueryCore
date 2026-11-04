@@ -80,3 +80,7 @@ temp/
 scratch/
 *.tmp
 
+
+# Coverage binary
+.coverage
+backend/.coverage
