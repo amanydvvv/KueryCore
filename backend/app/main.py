@@ -1,4 +1,4 @@
-"""
+﻿"""
 KueryCore AI — FastAPI Application Entry Point
 """
 
@@ -147,8 +147,13 @@ app.include_router(analytics_router)
 
 
 @app.get("/api/health", response_model=HealthResponse, tags=["health"])
-async def health_check():
-    """Check server, database, embedding provider, and generative model connectivity."""
+async def health_check(quick: bool = False):
+    """Check server, database, embedding provider, and generative model connectivity.
+
+    quick=true  -- DB-only check (SELECT 1). Skips Gemini + Groq calls.
+                  Used by keep-alive cron to avoid burning API quotas.
+    quick=false (default) -- full check: DB + embedding + generative model.
+    """
     import asyncio
     from sqlalchemy import text
     from app.database import async_session
@@ -168,6 +173,17 @@ async def health_check():
     except Exception as e:
         logger.warning("DB health check failed: %s", e)
         db_status = "unhealthy"
+
+    # --- Quick mode: DB-only (skips Gemini + Groq). Used by keep-alive cron. ---
+    if quick:
+        return HealthResponse(
+            status="healthy" if db_status == "healthy" else "unhealthy",
+            database=db_status,
+            llm_provider="skipped",
+            generative_model="skipped",
+            migration_version=migration_version,
+            version=settings.APP_VERSION,
+        )
 
     # --- Embedding provider check (Gemini) ---
     llm_status = "unhealthy"
