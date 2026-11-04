@@ -2,21 +2,74 @@ name: Keep Alive Render & Supabase
 
 on:
   schedule:
-    # Runs every 14 minutes to keep Render (15m idle) and Supabase active
+    # Every 14 minutes — Render free tier spins down after 15 min of inactivity.
+    # GitHub Actions cron minimum is 5 min; 14 min keeps us safely under the idle window.
     - cron: '*/14 * * * *'
-  workflow_dispatch: # Allows manual trigger from GitHub UI
+  workflow_dispatch: # Manual trigger from GitHub UI
 
 jobs:
   ping:
+    name: Ping backend health endpoint
     runs-on: ubuntu-latest
+    timeout-minutes: 5          # Hard cap on the whole job (GitHub default is 360 min)
+
     steps:
-      - name: Ping KueryCore Backend Health Endpoint
+      - name: Ping KueryCore backend (keep Render + Supabase warm)
+        env:
+          # Set BACKEND_URL in GitHub Settings → Secrets and variables → Actions
+          # Value: https://documind-ai-97t5.onrender.com
+          # (no trailing slash)
+          BACKEND_URL: ${{ secrets.BACKEND_URL || 'https://documind-ai-97t5.onrender.com' }}
         run: |
-          echo "Pinging KueryCore backend to prevent cold start and keep Supabase warm..."
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 https://documind-ai-97t5.onrender.com/api/health)
-          echo "Received HTTP status: $HTTP_STATUS"
-          if [ "$HTTP_STATUS" -eq 200 ]; then
-            echo "Backend is warm and healthy."
-          else
-            echo "Warning: Backend responded with status $HTTP_STATUS"
-          fi
+          set -euo pipefail
+
+          TARGET="${BACKEND_URL}/api/health"
+          echo "Target: ${TARGET}"
+
+          # --connect-timeout 30  — TCP handshake budget (Render boot can be slow)
+          # --max-time 120        — total transfer budget (cold start + DB + LLM health checks)
+          # --retry 3             — retry up to 3 times on transient failures
+          # --retry-delay 15      — wait 15 s between retries (avoids hammering a booting instance)
+          # --retry-connrefused   — treat connection-refused as retryable (instance still booting)
+          # --retry-max-time 180  — total time budget across all retries
+          # -s                    — silent (no progress bar in logs)
+          # -w "%{http_code}"     — write only the HTTP status code to stdout
+          # -o /dev/null          — discard the response body
+
+          HTTP_STATUS=$(curl -s \
+            --connect-timeout 30 \
+            --max-time 120 \
+            --retry 3 \
+            --retry-delay 15 \
+            --retry-connrefused \
+            --retry-max-time 180 \
+            -w "%{http_code}" \
+            -o /dev/null \
+            "${TARGET}" || echo "000")
+
+          echo "HTTP status received: ${HTTP_STATUS}"
+
+          case "${HTTP_STATUS}" in
+            200)
+              echo "✅ Backend is warm and healthy."
+              ;;
+            000)
+              # curl itself failed (timeout, DNS, TLS) — log but do NOT fail the job.
+              # A failed keep-alive is better treated as a warning; failing the job
+              # here would flood your GitHub notifications without fixing anything.
+              echo "⚠️  curl error (timeout or connection failure). Render instance may still be starting up."
+              echo "    This is expected on the first ping after an idle period. The next ping (in 14 min) should succeed."
+              # Exit 0 intentionally — keep-alive failures should be silent.
+              ;;
+            502|503|504)
+              echo "⚠️  Render gateway error (${HTTP_STATUS}) — instance is likely starting up. Next ping should succeed."
+              ;;
+            *)
+              echo "⚠️  Unexpected status ${HTTP_STATUS}. Backend may be degraded."
+              ;;
+          esac
+
+          # Always exit 0 — the purpose of this job is to wake the instance,
+          # not to assert strict health. Real health alerting belongs in a
+          # separate monitoring workflow or uptime service (e.g. UptimeRobot).
+          exit 0
