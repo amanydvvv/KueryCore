@@ -1,16 +1,18 @@
-﻿"""
-KueryCore AI — FastAPI Application Entry Point
+"""
+KueryCore AI - FastAPI Application Entry Point
 """
 
 import logging
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.database import init_db, close_db
+from app.database import init_db, close_db, get_db
 from app.schemas import HealthResponse
 from app.routers import (
     documents_router,
@@ -32,10 +34,6 @@ async def lifespan(app: FastAPI):
     import asyncio
 
     # --- Database ---
-    # Wrapped in try/except so a transient connection hiccup at startup
-    # doesn't crash-loop the service. Tables are created by alembic upgrade
-    # head (Render Pre-Deploy Command); init_db() here only enables the
-    # pgvector extension and is safe to retry on the next request.
     try:
         await init_db()
     except Exception as e:
@@ -44,11 +42,6 @@ async def lifespan(app: FastAPI):
         )
 
     # --- Startup model smoke-test ---
-    # Runs in non-development environments only. Fails loudly (CRITICAL log)
-    # but does NOT crash the server — a degraded server (DB up, LLM temporarily
-    # unreachable) is preferable to a hard 502 for every user on Render.
-    # The /api/health endpoint will report generative_model: "unreachable" so
-    # monitoring alerts fire without taking the whole service down.
     if settings.ENVIRONMENT.lower() != "development":
         try:
             from app.services.generation import get_llm
@@ -92,11 +85,9 @@ async def add_correlation_id(request: Request, call_next):
 
 # CORS
 origins = settings.CORS_ORIGINS if isinstance(settings.CORS_ORIGINS, list) else ["*"]
-# Apply strict origin enforcement and disable credentials unless explicitly needed.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins if "*" in origins else origins,
-    # Updated regex to only allow specific trusted domains (adjust as needed).
     allow_origin_regex=r"^https://([a-z0-9-]+-[a-z0-9]+-[a-z0-9]+\.vercel\.app|docu-mind-ai-iota\.vercel\.app)$",
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -146,44 +137,33 @@ app.include_router(conversations_router)
 app.include_router(analytics_router)
 
 
-@app.get("/api/health", response_model=HealthResponse, tags=["health"])
-async def health_check(quick: bool = False):
-    """Check server, database, embedding provider, and generative model connectivity.
+@app.get("/api/ping", tags=["Health"])
+async def ping_keep_alive(db: AsyncSession = Depends(get_db)):
+    """Lightweight keep-alive ping for Render & Supabase.
 
-    quick=true  -- DB-only check (SELECT 1). Skips Gemini + Groq calls.
-                  Used by keep-alive cron to avoid burning API quotas.
-    quick=false (default) -- full check: DB + embedding + generative model.
+    Executes a fast SELECT 1 to prevent Supabase inactivity pausing
+    and keep Render instances warm without invoking LLM/embeddings.
     """
+    await db.execute(select(1))
+    return {"status": "ok"}
+
+
+@app.get("/api/health", response_model=HealthResponse, tags=["health"])
+async def health_check():
+    """Check server, database, embedding provider, and generative model connectivity."""
     import asyncio
     from sqlalchemy import text
     from app.database import async_session
 
-    # --- Database check + migration version ---
+    # --- Database check ---
     db_status = "unhealthy"
-    migration_version = "unknown"
     try:
         async with async_session() as session:
             await session.execute(text("SELECT 1"))
             db_status = "healthy"
-            # Read the current alembic revision from the DB so the health
-            # endpoint can confirm migrations have been applied correctly.
-            result = await session.execute(text("SELECT version_num FROM alembic_version"))
-            row = result.fetchone()
-            migration_version = row[0] if row else "no_version_table"
     except Exception as e:
         logger.warning("DB health check failed: %s", e)
         db_status = "unhealthy"
-
-    # --- Quick mode: DB-only (skips Gemini + Groq). Used by keep-alive cron. ---
-    if quick:
-        return HealthResponse(
-            status="healthy" if db_status == "healthy" else "unhealthy",
-            database=db_status,
-            llm_provider="skipped",
-            generative_model="skipped",
-            migration_version=migration_version,
-            version=settings.APP_VERSION,
-        )
 
     # --- Embedding provider check (Gemini) ---
     llm_status = "unhealthy"
@@ -203,7 +183,6 @@ async def health_check(quick: bool = False):
             llm_status = "unreachable"
 
     # --- Generative model check (Groq cascade primary) ---
-    # Short prompt, 5s timeout — tests the configured GENERATIVE_MODEL specifically.
     gen_status = "unconfigured"
     if settings.GROQ_API_KEY or settings.GEMINI_API_KEY:
         try:
@@ -231,6 +210,5 @@ async def health_check(quick: bool = False):
         database=db_status,
         llm_provider=llm_status,
         generative_model=gen_status,
-        migration_version=migration_version,
         version=settings.APP_VERSION,
     )
