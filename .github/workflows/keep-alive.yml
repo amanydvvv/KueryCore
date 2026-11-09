@@ -1,40 +1,36 @@
-﻿name: Keep Alive Render & Supabase
+name: Keep Alive Render & Supabase
 
 on:
   schedule:
-    # Every 14 minutes â€” Render free tier spins down after 15 min of inactivity.
-    # GitHub Actions cron minimum is 5 min; 14 min keeps us safely under the idle window.
+    # Runs every 14 minutes to keep Render (15m idle) and Supabase active
     - cron: '*/14 * * * *'
-  workflow_dispatch: # Manual trigger from GitHub UI
+  workflow_dispatch: # Allows manual trigger from GitHub UI
 
 jobs:
   ping:
     name: Ping backend health endpoint
     runs-on: ubuntu-latest
-    timeout-minutes: 5          # Hard cap on the whole job (GitHub default is 360 min)
+    timeout-minutes: 5
 
     steps:
-      - name: Ping KueryCore backend (keep Render + Supabase warm)
+      - name: Ping KueryCore backend
         env:
-          # Set BACKEND_URL in GitHub Settings â†’ Secrets and variables â†’ Actions
-          # Value: https://documind-ai-97t5.onrender.com
-          # (no trailing slash)
           BACKEND_URL: ${{ secrets.BACKEND_URL || 'https://documind-ai-97t5.onrender.com' }}
         run: |
           set -euo pipefail
 
-          TARGET="${BACKEND_URL}/api/health?quick=true"
+          # Keep-alive targets /api/ping (lightweight alternative to /api/health to save LLM/embedding quotas)
+          TARGET="${BACKEND_URL:-https://documind-ai-97t5.onrender.com}/api/ping"
           echo "Target: ${TARGET}"
 
-          # --connect-timeout 30  â€” TCP handshake budget (Render boot can be slow)
-          # --max-time 120        â€” total transfer budget (cold start + DB + LLM health checks)
-          # --retry 3             â€” retry up to 3 times on transient failures
-          # --retry-delay 15      â€” wait 15 s between retries (avoids hammering a booting instance)
-          # --retry-connrefused   â€” treat connection-refused as retryable (instance still booting)
-          # --retry-max-time 180  â€” total time budget across all retries
-          # -s                    â€” silent (no progress bar in logs)
-          # -w "%{http_code}"     â€” write only the HTTP status code to stdout
-          # -o /dev/null          â€” discard the response body
+          # --connect-timeout 30  : TCP handshake budget
+          # --max-time 120        : total transfer budget (cold start)
+          # --retry 3             : retry up to 3 times on transient failure
+          # --retry-delay 15      : wait 15s between retries
+          # --retry-connrefused   : retry on connection refused
+          # --retry-max-time 180  : overall retry budget
+          # -w "%{http_code}"     : write status code
+          # -o /dev/null          : discard response body
 
           HTTP_STATUS=$(curl -s \
             --connect-timeout 30 \
@@ -51,25 +47,18 @@ jobs:
 
           case "${HTTP_STATUS}" in
             200)
-              echo "âœ… Backend is warm and healthy."
+              echo "SUCCESS: Backend is warm and healthy."
               ;;
             000)
-              # curl itself failed (timeout, DNS, TLS) â€” log but do NOT fail the job.
-              # A failed keep-alive is better treated as a warning; failing the job
-              # here would flood your GitHub notifications without fixing anything.
-              echo "âš ï¸  curl error (timeout or connection failure). Render instance may still be starting up."
-              echo "    This is expected on the first ping after an idle period. The next ping (in 14 min) should succeed."
-              # Exit 0 intentionally â€” keep-alive failures should be silent.
+              echo "WARNING: curl error (timeout or connection failure). Render instance may still be starting up."
+              echo "Next scheduled ping will wake it."
               ;;
             502|503|504)
-              echo "âš ï¸  Render gateway error (${HTTP_STATUS}) â€” instance is likely starting up. Next ping should succeed."
+              echo "WARNING: Render gateway error (${HTTP_STATUS}) -- instance is booting."
               ;;
             *)
-              echo "âš ï¸  Unexpected status ${HTTP_STATUS}. Backend may be degraded."
+              echo "WARNING: Unexpected status ${HTTP_STATUS}."
               ;;
           esac
 
-          # Always exit 0 â€” the purpose of this job is to wake the instance,
-          # not to assert strict health. Real health alerting belongs in a
-          # separate monitoring workflow or uptime service (e.g. UptimeRobot).
           exit 0
