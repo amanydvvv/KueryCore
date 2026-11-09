@@ -4,6 +4,9 @@ services:
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
+    # Runs BEFORE the new instance starts. A non-zero exit cancels the deploy
+    # (no crash-loop, no traffic cut-over). Requires DATABASE_URL_SYNC to be set.
+    preDeployCommand: "alembic upgrade head"
     healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL
@@ -19,4 +22,4 @@ services:
       - key: GENERATIVE_MODEL
         value: openai/gpt-oss-20b
       - key: CORS_ORIGINS
-        value: '["http://localhost:5173", "http://localhost:3000", "https://*.vercel.app"]'
+        value: '["http://localhost:5173", "http://localhost:3000", "https://docu-mind-ai-iota.vercel.app"]'

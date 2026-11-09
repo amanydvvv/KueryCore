@@ -8,15 +8,57 @@ on:
 
 jobs:
   ping:
+    name: Ping backend health endpoint
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+
     steps:
-      - name: Ping KueryCore Backend Health Endpoint
+      - name: Ping KueryCore backend
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL || 'https://documind-ai-97t5.onrender.com' }}
         run: |
-          echo "Pinging KueryCore backend to prevent cold start and keep Supabase warm..."
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 https://documind-ai-97t5.onrender.com/api/health)
-          echo "Received HTTP status: $HTTP_STATUS"
-          if [ "$HTTP_STATUS" -eq 200 ]; then
-            echo "Backend is warm and healthy."
-          else
-            echo "Warning: Backend responded with status $HTTP_STATUS"
-          fi
+          set -euo pipefail
+
+          # Keep-alive targets /api/ping (lightweight alternative to /api/health to save LLM/embedding quotas)
+          TARGET="${BACKEND_URL:-https://documind-ai-97t5.onrender.com}/api/ping"
+          echo "Target: ${TARGET}"
+
+          # --connect-timeout 30  : TCP handshake budget
+          # --max-time 120        : total transfer budget (cold start)
+          # --retry 3             : retry up to 3 times on transient failure
+          # --retry-delay 15      : wait 15s between retries
+          # --retry-connrefused   : retry on connection refused
+          # --retry-max-time 180  : overall retry budget
+          # -w "%{http_code}"     : write status code
+          # -o /dev/null          : discard response body
+
+          HTTP_STATUS=$(curl -s \
+            --connect-timeout 30 \
+            --max-time 120 \
+            --retry 3 \
+            --retry-delay 15 \
+            --retry-connrefused \
+            --retry-max-time 180 \
+            -w "%{http_code}" \
+            -o /dev/null \
+            "${TARGET}" || echo "000")
+
+          echo "HTTP status received: ${HTTP_STATUS}"
+
+          case "${HTTP_STATUS}" in
+            200)
+              echo "SUCCESS: Backend is warm and healthy."
+              ;;
+            000)
+              echo "WARNING: curl error (timeout or connection failure). Render instance may still be starting up."
+              echo "Next scheduled ping will wake it."
+              ;;
+            502|503|504)
+              echo "WARNING: Render gateway error (${HTTP_STATUS}) -- instance is booting."
+              ;;
+            *)
+              echo "WARNING: Unexpected status ${HTTP_STATUS}."
+              ;;
+          esac
+
+          exit 0

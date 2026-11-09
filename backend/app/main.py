@@ -1,16 +1,18 @@
 """
-KueryCore AI — FastAPI Application Entry Point
+KueryCore AI - FastAPI Application Entry Point
 """
 
 import logging
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.database import init_db, close_db
+from app.database import init_db, close_db, get_db
 from app.schemas import HealthResponse
 from app.routers import (
     documents_router,
@@ -32,14 +34,14 @@ async def lifespan(app: FastAPI):
     import asyncio
 
     # --- Database ---
-    await init_db()
+    try:
+        await init_db()
+    except Exception as e:
+        logger.critical(
+            "Database init failed at startup: %s -- server starting in degraded mode.", e
+        )
 
     # --- Startup model smoke-test ---
-    # Runs in non-development environments only. Fails loudly (CRITICAL log)
-    # but does NOT crash the server — a degraded server (DB up, LLM temporarily
-    # unreachable) is preferable to a hard 502 for every user on Render.
-    # The /api/health endpoint will report generative_model: "unreachable" so
-    # monitoring alerts fire without taking the whole service down.
     if settings.ENVIRONMENT.lower() != "development":
         try:
             from app.services.generation import get_llm
@@ -86,11 +88,20 @@ origins = settings.CORS_ORIGINS if isinstance(settings.CORS_ORIGINS, list) else 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins if "*" in origins else origins,
-    allow_origin_regex=r"^https://[a-z0-9-]+\.vercel\.app$",
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origin_regex=r"^https://([a-z0-9-]+-[a-z0-9]+-[a-z0-9]+\.vercel\.app|docu-mind-ai-iota\.vercel\.app)$",
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# Middleware to log CORS rejections (status 403) for unexpected origins.
+@app.middleware("http")
+async def log_cors_rejections(request: Request, call_next):
+    response = await call_next(request)
+    origin = request.headers.get("origin")
+    if origin and response.status_code == 403:
+        logger.warning("CORS rejection for origin: %s", origin)
+    return response
 
 # Rate limiting
 from slowapi.errors import RateLimitExceeded
@@ -124,6 +135,17 @@ app.include_router(documents_router)
 app.include_router(chat_router)
 app.include_router(conversations_router)
 app.include_router(analytics_router)
+
+
+@app.get("/api/ping", tags=["Health"])
+async def ping_keep_alive(db: AsyncSession = Depends(get_db)):
+    """Lightweight keep-alive ping for Render & Supabase.
+
+    Executes a fast SELECT 1 to prevent Supabase inactivity pausing
+    and keep Render instances warm without invoking LLM/embeddings.
+    """
+    await db.execute(select(1))
+    return {"status": "ok"}
 
 
 @app.get("/api/health", response_model=HealthResponse, tags=["health"])
@@ -161,7 +183,6 @@ async def health_check():
             llm_status = "unreachable"
 
     # --- Generative model check (Groq cascade primary) ---
-    # Short prompt, 5s timeout — tests the configured GENERATIVE_MODEL specifically.
     gen_status = "unconfigured"
     if settings.GROQ_API_KEY or settings.GEMINI_API_KEY:
         try:
