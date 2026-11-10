@@ -1,0 +1,6 @@
+# Dev / QA dependencies — do NOT add to requirements.txt (production)
+# Install with:  pip install -r requirements-dev.txt
+deepeval>=0.21.0
+pytest-cov>=6.0.0
+openapi-spec-validator>=0.7.1
+

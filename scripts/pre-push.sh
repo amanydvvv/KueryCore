@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[pre-push] Step 1/3: Checking Python syntax and undefined names..."
+echo "[pre-push] Step 1/3: Checking Python syntax, undefined names, and critical imports..."
 python -m compileall -q backend/app backend/tests
+(cd backend && python -c "from app.main import app; from app.routers.documents import router; from eval.judge import GroqJudge; print('[pre-push] Critical module imports verified.')")
 if command -v ruff >/dev/null 2>&1; then
     ruff check backend/app --select F821,E999
 fi
@@ -15,7 +16,7 @@ if [ "$HEAD_COUNT" -ne 1 ]; then
     exit 1
 fi
 
-echo "[pre-push] Step 3/3: Running fast smoke tests (keep-alive workflow)..."
-(cd backend && python -m pytest tests/test_keep_alive_workflow.py -q --tb=short)
+echo "[pre-push] Step 3/3: Running fast smoke tests (keep-alive workflow + deepeval unit tests)..."
+(cd backend && python -m pytest tests/test_keep_alive_workflow.py tests/test_deepeval.py -q --tb=short)
 
 echo "[pre-push] All guardrails passed."

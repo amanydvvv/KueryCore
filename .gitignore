@@ -55,6 +55,7 @@ claude-skills/
 !backend/tests/fixtures/
 !backend/tests/fixtures/**
 !backend/requirements.txt
+!backend/requirements-dev.txt
 
 # Eval run artifacts: timestamped reports and snapshot runs are ignored; results/baseline.json
 # is tracked on purpose (the comparison anchor for --diff).
